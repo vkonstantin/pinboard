@@ -14,6 +14,7 @@ class AggregateCommand extends Command
     protected $params;
     protected $app;
     protected $output;
+    private $lockFile;
 
     const DEFAULT_REQ_TIME_BORDER = 1.5;
     const DEFAULT_SLOW_REQ_TIME = 1.5;
@@ -26,6 +27,8 @@ class AggregateCommand extends Command
             ->setName('aggregate')
             ->setDescription('Aggregate data from source tables and save to report tables')
         ;
+        
+        $this->setLockFile( __FILE__ . '.lock');
     }
 
     protected function initMailer()
@@ -155,7 +158,7 @@ class AggregateCommand extends Command
             return;
         }
 
-        if(file_exists( __FILE__ . '.lock')) {
+        if($this->isProcessRuning()) {
             $output->writeln('<error>Cannot run data aggregation: the another instance of this script is already executing. Otherwise, remove ' . __FILE__ . '.lock file</error>');
 
             if ($this->mailer && isset($this->params['notification']['global_email'])) {
@@ -175,8 +178,8 @@ class AggregateCommand extends Command
             return;
         }
 
-        if(!touch( __FILE__ . '.lock')) {
-            $output->writeln('<error>Warning: cannot create ' . __FILE__ . '.lock file</error>');
+        if(!$this->createLockFile()) {
+            $output->writeln('<error>Warning: cannot create ' . $this->getLockFile() . ' file</error>');
         }
 
         $now = new \DateTime();
@@ -240,11 +243,11 @@ class AggregateCommand extends Command
 
             unset($errorPages);
         }
-
+        
         $db->executeQuery('START TRANSACTION');
 
         $sql = '
-            SELECT
+            SELECT 
                 server_name, hostname, COUNT(*) AS cnt
             FROM
                 request
@@ -592,8 +595,8 @@ class AggregateCommand extends Command
 
         $output->writeln('<info>Data are aggregated successfully</info>');
 
-        if (!unlink( __FILE__ . '.lock')) {
-            $output->writeln('<error>Error: cannot remove ' . __FILE__ . '.lock file, you must remove it manually and check server settings.</error>');
+        if (!$this->removeLockFile()) {
+            $output->writeln('<error>Error: cannot remove ' . $this->getLockFile() . ' file, you must remove it manually and check server settings.</error>');
         }
     }
 
@@ -757,5 +760,38 @@ class AggregateCommand extends Command
         }
 
         unset($message);
+    }
+
+    private function createLockFile() {
+        return file_put_contents($this->getLockFile(), getmypid());
+    }
+    
+    private function removeLockFile() {
+        return unlink($this->getLockFile());
+    }
+
+    private function isProcessRuning() {
+        if (file_exists($this->getLockFile()) && $this->isPidRuning(file_get_contents($this->getLockFile())) ) {
+            return true;
+        }
+        return false;
+    }
+
+    private function isPidRuning($pid) {
+        if (function_exists('pcntl_getpriority')) {
+            @$res = pcntl_getpriority($pid);
+            if ($res !== false) {
+                return $pid;
+            }
+        }
+        return false;
+    }
+
+    private function getLockFile() {
+        return $this->lockFile;
+    }
+
+    private function setLockFile($lockFile) {
+        $this->lockFile = $lockFile;
     }
 }
